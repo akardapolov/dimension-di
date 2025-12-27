@@ -48,7 +48,7 @@ class DINamedTest {
         .provideNamed(
             ScheduledExecutorService.class,
             "executorService",
-            ServiceLocator.singleton(() -> Executors.newSingleThreadScheduledExecutor())
+            ServiceLocator.singleton(Executors::newSingleThreadScheduledExecutor)
         )
         .buildAndInit();
 

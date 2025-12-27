@@ -18,6 +18,7 @@
     - [Пропуск сканирования (только ручная настройка)](#пропуск-сканирования-только-ручная-настройка)
     - [Тестирование и переопределение](#тестирование-и-переопределение)
     - [Assisted Injection (паттерн Фабрика)](#assisted-injection-паттерн-фабрика)
+    - [Коллекции и множественная привязка (Multibinding)](#коллекции-и-множественная-привязка-multibinding)
 - [Как это работает](#как-это-работает)
     - [DependencyScanner](#dependencyscanner)
     - [DimensionDI.Builder](#dimensiondibuilder)
@@ -28,6 +29,7 @@
     - [Начальная загрузка (Bootstrap)](#начальная-загрузка-bootstrap)
     - [Получение в runtime (только в корне композиции)](#получение-в-runtime-только-в-корне-композиции)
     - [Ручная регистрация (в Builder)](#ручная-регистрация-в-builder)
+    - [Коллекции / Multibinding](#коллекции--multibinding)
     - [Assisted injection](#assisted-injection)
     - [Утилиты](#утилиты)
 - [Сравнительные таблицы](#сравнительные-таблицы)
@@ -427,40 +429,10 @@ import ru.dimension.di.DimensionDI;
 import ru.dimension.di.ServiceLocator;
 import jakarta.inject.Inject;
 
-// 1. Интерфейс фабрики (должен быть определен)
-// Метод может называться как угодно, главное - совпадающие типы аргументов
-interface UserSessionFactory {
-  UserSession create(String sessionId, int timeoutSeconds);
-}
-
-// 2. Целевой класс (должен быть определен)
-class UserSession {
-  private final String sessionId;
-  private final int timeout;
-
-  // Обязателен @Inject для конструктора
-  // Параметры, передаваемые через фабрику, помечаются @Assisted
-  @Inject
-  public UserSession(@Assisted String sessionId,
-                     @Assisted int timeout,
-                     SomeDependency dependency) { // SomeDependency возьмется из DI
-    this.sessionId = sessionId;
-    this.timeout = timeout;
-    System.out.println("Session created: " + sessionId + ", dependency: " + dependency);
-  }
-}
-
-// Простая зависимость для примера
-class SomeDependency {
-  @Inject
-  public SomeDependency() {}
-}
-
-// 3. Использование (Ваш код внутри main)
 public class Main {
   public static void main(String[] args) {
     DimensionDI.builder()
-            .scanPackages("com.example") // Сканирует SomeDependency
+            .scanPackages("com.example")
             // Регистрируем фабрику и связываем её с реализацией UserSession
             .bindFactory(UserSessionFactory.class, UserSession.class)
             .buildAndInit();
@@ -504,6 +476,74 @@ interface ConnectionFactory {
 ```
 
 Примечание: Интерфейсы фабрик по умолчанию являются синглтонами. Каждый вызов фабрики создаёт новый экземпляр целевого класса, при этом DI-зависимости (такие как @Singleton) правильно разделяются между всеми созданными экземплярами.
+
+### Коллекции и множественная привязка (Multibinding)
+
+Dimension-DI поддерживает внедрение коллекций привязок (`List<T>`, `Set<T>` и `Map<String, T>`). Есть два способа использовать эту функцию: **Неявный** (на основе сканирования) и **Явный** (в стиле Dagger).
+
+#### 1. Неявный Multibinding (Автоматический)
+
+При сканировании пакетов реализации, обнаруженные для интерфейса, автоматически становятся доступными для внедрения коллекций.
+*   `List<T>` / `Set<T>`: Содержит все обнаруженные реализации.
+*   `Map<String, T>`: Содержит только именованные привязки, с ключами в виде имени реализации (или значения `@Named`).
+
+**Пример:**
+
+```java
+public interface Plugin {}
+@Singleton public class AudioPlugin implements Plugin {}
+public class VideoPlugin implements Plugin {}
+```
+
+```java
+public class PluginManager {
+    @Inject
+    public PluginManager(List<Plugin> allPlugins, Map<String, Plugin> pluginMap) {
+        // allPlugins содержит [AudioPlugin, VideoPlugin]
+        // ключи pluginMap: "AudioPlugin", "VideoPlugin"
+    }
+}
+```
+
+#### 2. Явный Multibinding (В стиле Dagger)
+
+Вы можете явно вносить элементы, используя `intoSet` или `intoMap` в `Builder`.
+**Примечание:** Если вы регистрируете явные вклады для типа, **неявное сканирование для этой коллекции отключается**. Будут внедрены только ваши явные записи.
+
+```java
+public static void buildAndInit() {
+  DimensionDI.builder()
+      .scanPackages("com.example")
+      .intoSet(Plugin.class, () -> new CustomPlugin())
+      .intoSetSingleton(Plugin.class, () -> new HeavyPlugin())
+      .intoMap(Handler.class, "login", () -> new LoginHandler())
+      .buildAndInit();
+}
+```
+
+#### 3. Именованное внедрение одного элемента
+
+Вы можете использовать `@Named` в точке внедрения коллекции, чтобы внедрить коллекцию, содержащую **только этот конкретный именованный бин**.
+
+```java
+public class Service {
+    // Внедряет List, содержащий ТОЛЬКО бин с именем "special"
+    @Inject
+    public Service(@Named("special") List<Plugin> specialPlugins) {
+       // size() == 1
+    }
+}
+```
+
+#### Сводка и приоритеты
+
+| Тип внедрения        | Поведение (Автоматическое)                          | Поведение (Явное через Builder)                   |
+|:---------------------|:----------------------------------------------------|:--------------------------------------------------|
+| **`List<T>`**        | Все отсканированные/зарегистрированные экземпляры T | Все вклады `intoSet(T, ...)`                      |
+| **`Set<T>`**         | Все отсканированные/зарегистрированные экземпляры T | Все вклады `intoSet(T, ...)`                      |
+| **`Map<String, T>`** | Ключи = Простое имя класса (или @Named)             | Ключи = Явные строки, переданные в `intoMap(...)` |
+
+Помимо внедрения, вы можете запрашивать multibindings напрямую через `ServiceLocator.getAll(T.class)` или `ServiceLocator.getNamedMap(T.class)`.
 
 ## Как это работает
 
@@ -551,15 +591,16 @@ interface ConnectionFactory {
 ## Ограничения
 
 - Поддерживаются только аннотации Jakarta Inject:
-  - `@Inject` (на конструкторах, полях и методах)
-  - `@Singleton`
-  - `@Named` (на параметрах конструктора, полях и параметрах методов)
-- Внедрение в поля работает на `private`, `protected` и `public` не-final полях, включая унаследованные.
-- Резервный поиск именованных/неименованных зависимостей включён по умолчанию для удобства; отключите для строгого режима.
-- Ручные привязки переопределяют сканированные, когда авто-алиасинг включён.
+    - `@Inject` (на конструкторах, полях и методах)
+    - `@Singleton`
+    - `@Named` (на параметрах конструктора, полях и параметрах методов)
+- Внедрение в поля работает с `private`, `protected` и `public` не-final полями, включая унаследованные.
+- Fallback именованных/неименованных зависимостей включен по умолчанию для удобства; отключите для строгого режима.
+- Ручные привязки переопределяют отсканированные при включенном авто-алиасинге.
 - **Пока не поддерживается**:
-  - Кастомные квалификаторы помимо `@Named`
-  - `Provider<T>`, мульти-привязки (коллекции), скоупы помимо singleton
+    - Пользовательские квалификаторы, кроме `@Named`
+    - Внедрение `Provider<T>`
+    - Scope, отличные от singleton
 - Сканирование использует JDK Class-File API (Java 24+).
 
 ---
@@ -583,6 +624,13 @@ interface ConnectionFactory {
 - `.bindFactory(factoryInterface, targetClass)` — Регистрирует фабрику для assisted injection
 - `.bindFactory(factoryInterface)` — Регистрирует фабрику (целевой класс выводится из возвращаемого типа)
 - `.autoAliasUniqueNamed(boolean)` — Включить/отключить авто-алиасинг для уникальных именованных привязок (по умолчанию: true)
+
+### Коллекции / Multibinding
+- `.intoSet(type, supplier)` — Вносит элемент в `Set<T>` / `List<T>`
+- `.intoMap(type, key, supplier)` — Вносит запись в `Map<String, T>`
+- `.intoSetSingleton(...)` / `.intoMapSingleton(...)` — Вносит кэшированный синглтон
+- `ServiceLocator.getAll(type)` — Возвращает `List<T>` всех привязок
+- `ServiceLocator.getNamedMap(type)` — Возвращает `Map<String, T>` именованных привязок
 
 ### Assisted Injection
 - `ServiceLocator.create(type, assistedArgs...)` — Создаёт экземпляр с параметрами времени выполнения
@@ -609,7 +657,7 @@ interface ConnectionFactory {
 | Кривая обучения              | ⭐ Минимальная                        | ⭐⭐⭐⭐⭐ Крутая                           | ⭐⭐⭐ Умеренная               | ⭐⭐⭐ Умеренная             |
 | Производительность           | ⭐⭐⭐⭐⭐ Очень высокая                  | ⭐⭐ Низкая                              | ⭐⭐⭐ Средняя                 | ⭐⭐⭐⭐⭐ Высочайшая          |
 | Время запуска                | Сверхбыстрое                         | Медленное                              | Быстрое                     | Мгновенное (compile-time) |
-| Метаданные в рантайме        | JDK Class-File API                   | Динамическая рефлексия                 | Динамическая рефлексия      | Нет (compile-time)        |
+| Метаданные в runtime         | JDK Class-File API                   | Динамическая рефлексия                 | Динамическая рефлексия      | Нет (compile-time)        |
 | Генерация байт-кода          | Нет                                  | Обширные прокси                        | Обширные прокси             | Только в compile-time     |
 | Области видимости (Scoping)  | @Singleton                           | Request, Session, Singleton, Prototype | Singleton, кастомные        | Singleton, кастомные      |
 | Поддержка @Singleton         | ✅ Да                                 | ✅ Да                                   | ✅ Да                        | ✅ Да                      |
@@ -618,7 +666,7 @@ interface ConnectionFactory {
 | Assisted внедрение           | ✅ `@Assisted` + Фабрика              | ❌ Вручную                              | ✅ AssistedInject            | ✅ @AssistedInject         |
 | Внедрение в поля             | ✅ Да                                 | ✅ Да                                   | ✅ Да                        | ✅ Да (members injection)  |
 | Внедрение в методы           | ✅ Да                                 | ✅ Да                                   | ✅ Да                        | ✅ Да (members injection)  |
-| Коллекции/Мульти-биндинги    | ❌ Нет                                | ✅ Да                                   | ✅ Да                        | ✅ Да (@IntoSet/@IntoMap)  |
+| Коллекции/Мульти-биндинги    | ✅ Да (явно и неявно)                 | ✅ Да                                   | ✅ Да                        | ✅ Да (@IntoSet/@IntoMap)  |
 | Fallback: по имени/стандарт  | ✅ Автоматический                     | ❌ Нет                                  | ❌ Нет                       | ❌ Нет                     |
 | Циклические зависимости      | ✅ Да, явная ошибка                   | ✅ Да                                   | ✅ Да                        | ✅ Compile-time            |
 | Система модулей/конфигурации | Fluent Builder                       | `@Configuration` + XML                 | Классы `Module`             | Интерфейс `Component`     |

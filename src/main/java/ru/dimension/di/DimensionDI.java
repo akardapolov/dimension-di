@@ -2,12 +2,7 @@ package ru.dimension.di;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Supplier;
 import ru.dimension.di.ServiceLocator.Key;
 
@@ -23,10 +18,61 @@ public final class DimensionDI {
     private final Set<String> packagesToScan = new HashSet<>();
     private final Map<Key, Supplier<?>> manualProviders = new HashMap<>();
     private final List<FactoryBinding<?>> factoryBindings = new ArrayList<>();
-    private boolean autoAliasUniqueNamed = true;  // NEW: enabled by default
+    private boolean autoAliasUniqueNamed = true;
+
+    // Scanner config
+    private DependencyScanner.Config scannerConfig = DependencyScanner.Config.defaultsJakartaInject();
+
+    // Dagger-style multibind contributions
+    private final Map<Class<?>, List<Supplier<?>>> intoSetContributions = new HashMap<>();
+    private final Map<Class<?>, LinkedHashMap<String, Supplier<?>>> intoMapContributions = new HashMap<>();
 
     public Builder scanPackages(String... packages) {
       packagesToScan.addAll(List.of(packages));
+      return this;
+    }
+
+    /**
+     * Scanner configuration.
+     * Annotation names may be FQCN ("jakarta.inject.Inject") or descriptors ("Ljakarta/inject/Inject;").
+     */
+    public Builder scannerConfig(DependencyScanner.Config config) {
+      this.scannerConfig = Objects.requireNonNull(config, "config");
+      return this;
+    }
+
+    /**
+     * Convenience: override what is considered an "inject constructor annotation".
+     */
+    public Builder injectConstructorAnnotations(String... annotationsFqcnOrDesc) {
+      Set<String> s = new LinkedHashSet<>(List.of(annotationsFqcnOrDesc));
+      this.scannerConfig = new DependencyScanner.Config(
+          s,
+          this.scannerConfig.singletonClassAnnotations(),
+          this.scannerConfig.allowPublicNoArgConstructor()
+      );
+      return this;
+    }
+
+    /**
+     * Convenience: override what is considered a "singleton class annotation".
+     */
+    public Builder singletonClassAnnotations(String... annotationsFqcnOrDesc) {
+      Set<String> s = new LinkedHashSet<>(List.of(annotationsFqcnOrDesc));
+      this.scannerConfig = new DependencyScanner.Config(
+          this.scannerConfig.injectConstructorAnnotations(),
+          s,
+          this.scannerConfig.allowPublicNoArgConstructor()
+      );
+      return this;
+    }
+
+    public Builder allowImplicitPublicNoArgConstructor(boolean enabled) {
+      this.scannerConfig = new DependencyScanner.Config(
+          this.scannerConfig.injectConstructorAnnotations(),
+          this.scannerConfig.singletonClassAnnotations(),
+          enabled
+      );
       return this;
     }
 
@@ -77,6 +123,56 @@ public final class DimensionDI {
       return this;
     }
 
+    // =========================================================================
+    // Dagger-style multibind APIs
+    // =========================================================================
+
+    /**
+     * Contribute one element into {@code Set<T>} (and also {@code List<T>}/{@code Collection<T>} if injected).
+     */
+    public <T> Builder intoSet(Class<T> elementType, Supplier<? extends T> contribution) {
+      Objects.requireNonNull(elementType, "elementType");
+      Objects.requireNonNull(contribution, "contribution");
+      intoSetContributions
+          .computeIfAbsent(elementType, k -> new ArrayList<>())
+          .add((Supplier<?>) contribution);
+      return this;
+    }
+
+    public <T> Builder intoSetSingleton(Class<T> elementType, Supplier<? extends T> contribution) {
+      return intoSet(elementType, ServiceLocator.singleton(contribution));
+    }
+
+    /**
+     * Contribute one entry into {@code Map<String, T>}.
+     */
+    public <T> Builder intoMap(Class<T> valueType, String key, Supplier<? extends T> contribution) {
+      Objects.requireNonNull(valueType, "valueType");
+      if (key == null || key.isBlank()) {
+        throw new IllegalArgumentException("intoMap key must be non-blank");
+      }
+      Objects.requireNonNull(contribution, "contribution");
+
+      LinkedHashMap<String, Supplier<?>> m =
+          intoMapContributions.computeIfAbsent(valueType, k -> new LinkedHashMap<>());
+
+      if (m.containsKey(key)) {
+        throw new IllegalArgumentException(
+            "Duplicate intoMap key '" + key + "' for value type " + valueType.getName());
+      }
+
+      m.put(key, (Supplier<?>) contribution);
+      return this;
+    }
+
+    public <T> Builder intoMapSingleton(Class<T> valueType, String key, Supplier<? extends T> contribution) {
+      return intoMap(valueType, key, ServiceLocator.singleton(contribution));
+    }
+
+    // =========================================================================
+    // Assisted factories
+    // =========================================================================
+
     public <F> Builder bindFactory(Class<F> factoryInterface, Class<?> targetClass) {
       factoryBindings.add(new FactoryBinding<>(factoryInterface, targetClass));
       return this;
@@ -105,20 +201,50 @@ public final class DimensionDI {
       // 1. Run the scanner
       if (!packagesToScan.isEmpty()) {
         List<DependencyScanner.ScanResult> scanResults =
-            DependencyScanner.scan(packagesToScan.toArray(new String[0]));
+            DependencyScanner.scan(scannerConfig, packagesToScan.toArray(new String[0]));
+
         try {
           for (var result : scanResults) {
             Class<?> clazz = Class.forName(result.className());
             Supplier<?> provider = ServiceLocator.createConstructorProvider(clazz, result.isSingleton());
+
+            // Register the class itself
             allProviders.put(Key.of(clazz), provider);
 
+            // Interface bindings:
+            // - ensure unnamed binding exists (first wins)
+            // - also register named binding for each impl (impl simple name / fallback collision handling)
             for (String ifaceName : result.interfaces()) {
               try {
                 Class<?> iface = Class.forName(ifaceName);
-                Key ifaceKey = Key.of(iface);
-                if (!allProviders.containsKey(ifaceKey) && !manualProviders.containsKey(ifaceKey)) {
-                  allProviders.put(ifaceKey, provider);
+                Key unnamedIfaceKey = Key.of(iface);
+
+                if (!allProviders.containsKey(unnamedIfaceKey) && !manualProviders.containsKey(unnamedIfaceKey)) {
+                  allProviders.put(unnamedIfaceKey, provider);
                 }
+
+                String implName = clazz.getSimpleName();
+                Key namedIfaceKey = Key.of(iface, implName);
+
+                if (allProviders.containsKey(namedIfaceKey) || manualProviders.containsKey(namedIfaceKey)) {
+                  implName = clazz.getName();
+                  namedIfaceKey = Key.of(iface, implName);
+                }
+
+                if (allProviders.containsKey(namedIfaceKey) || manualProviders.containsKey(namedIfaceKey)) {
+                  int suffix = 2;
+                  Key candidate;
+                  do {
+                    candidate = Key.of(iface, implName + "#" + suffix);
+                    suffix++;
+                  } while (allProviders.containsKey(candidate) || manualProviders.containsKey(candidate));
+                  namedIfaceKey = candidate;
+                }
+
+                if (!allProviders.containsKey(namedIfaceKey) && !manualProviders.containsKey(namedIfaceKey)) {
+                  allProviders.put(namedIfaceKey, provider);
+                }
+
               } catch (ClassNotFoundException ignored) {}
             }
           }
@@ -130,13 +256,14 @@ public final class DimensionDI {
       // 2. Add manual providers
       allProviders.putAll(manualProviders);
 
-      // 3. NEW: Auto-create unnamed aliases for unique named bindings
+      // 3. Auto-create unnamed aliases for unique named bindings
       if (autoAliasUniqueNamed) {
         createUnnamedAliases(allProviders);
       }
 
-      // 4. Initialize
+      // 4. Initialize providers + multibind contributions
       ServiceLocator.init(allProviders);
+      ServiceLocator.initMultibindings(intoSetContributions, intoMapContributions);
 
       // 5. Register factories
       for (var binding : factoryBindings) {
@@ -144,12 +271,7 @@ public final class DimensionDI {
       }
     }
 
-    /**
-     * For each type that has exactly one named binding and no unnamed binding,
-     * create an unnamed alias pointing to the named one.
-     */
     private void createUnnamedAliases(Map<Key, Supplier<?>> allProviders) {
-      // Group named keys by type
       Map<Class<?>, List<Key>> namedKeysByType = new HashMap<>();
       Set<Class<?>> typesWithUnnamed = new HashSet<>();
 
@@ -161,7 +283,6 @@ public final class DimensionDI {
         }
       }
 
-      // Create aliases for types with exactly one named binding and no unnamed
       for (var entry : namedKeysByType.entrySet()) {
         Class<?> type = entry.getKey();
         List<Key> namedKeys = entry.getValue();

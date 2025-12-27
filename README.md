@@ -18,6 +18,7 @@ Tiny, fast, zero-boilerplate runtime Dependency Injection (DI) framework for Jav
     - [Skipping Scanning (Manual Wiring Only)](#skipping-scanning-manual-wiring-only)
     - [Testing and Overriding](#testing-and-overriding)
     - [Assisted Injection (Factory Pattern)](#assisted-injection-factory-pattern)
+    - [Collections and Multibinding](#collections-and-multibinding)
 - [How It Works](#how-it-works)
     - [DependencyScanner](#dependencyscanner)
     - [DimensionDI.Builder](#dimensiondibuilder)
@@ -28,6 +29,7 @@ Tiny, fast, zero-boilerplate runtime Dependency Injection (DI) framework for Jav
     - [Bootstrap](#bootstrap)
     - [Runtime Fetch (Composition Root Only)](#runtime-fetch-composition-root-only)
     - [Manual Registration (on Builder)](#manual-registration-on-builder)
+    - [Collections / Multibinding](#collections--multibinding)
     - [Assisted-injection](#assisted-injection)
     - [Utilities](#utilities)
 - [Comparison Tables](#comparison-tables)
@@ -409,40 +411,10 @@ import ru.dimension.di.DimensionDI;
 import ru.dimension.di.ServiceLocator;
 import jakarta.inject.Inject;
 
-// 1. Factory interface (must be defined)
-// The method name can be anything; only parameter types and order matter
-interface UserSessionFactory {
-  UserSession create(String sessionId, int timeoutSeconds);
-}
-
-// 2. Target class (must be defined)
-class UserSession {
-  private final String sessionId;
-  private final int timeout;
-
-  // @Inject is required on the constructor
-  // Parameters passed via the factory must be annotated with @Assisted
-  @Inject
-  public UserSession(@Assisted String sessionId,
-                     @Assisted int timeout,
-                     SomeDependency dependency) { // SomeDependency will be resolved from DI
-    this.sessionId = sessionId;
-    this.timeout = timeout;
-    System.out.println("Session created: " + sessionId + ", dependency: " + dependency);
-  }
-}
-
-// Simple dependency for example purposes
-class SomeDependency {
-  @Inject
-  public SomeDependency() {}
-}
-
-// 3. Usage (your code inside main)
 public class Main {
   public static void main(String[] args) {
     DimensionDI.builder()
-            .scanPackages("com.example") // Scans for injectable classes like SomeDependency
+            .scanPackages("com.example")
             // Register the factory and bind it to the UserSession implementation
             .bindFactory(UserSessionFactory.class, UserSession.class)
             .buildAndInit();
@@ -465,27 +437,73 @@ For simpler cases, create instances directly without defining a factory interfac
 UserSession session = ServiceLocator.create(UserSession.class, "sess-001", 3600);
 ```
 
-##### Named Assisted Parameters
+### Collections and Multibinding
 
-When you have multiple parameters of the same type, use named @Assisted annotations:
+Dimension-DI supports injecting collections of bindings (`List<T>`, `Set<T>`, and `Map<String, T>`). There are two ways to use this feature: **Implicit** (scanning-based) and **Explicit** (Dagger-style).
+
+#### 1. Implicit Multibinding (Automatic)
+
+When you scan packages, implementations discovered for an interface are automatically available for collection injection.
+*   `List<T>` / `Set<T>`: Contains all discovered implementations.
+*   `Map<String, T>`: Contains named bindings only, keyed by the implementation name (or `@Named` value).
+
+**Example:**
 
 ```java
-class Connection {
-    @Inject
-    Connection(@Assisted("host") String host,
-               @Assisted("backup") String backupHost,
-               ConnectionPool pool) {
-        // ...
-    }
-}
+public interface Plugin {}
+@Singleton public class AudioPlugin implements Plugin {}
+public class VideoPlugin implements Plugin {}
+```
 
-interface ConnectionFactory {
-    Connection create(@Assisted("host") String host,
-                      @Assisted("backup") String backupHost);
+```java
+public class PluginManager {
+    @Inject
+    public PluginManager(List<Plugin> allPlugins, Map<String, Plugin> pluginMap) {
+        // allPlugins contains [AudioPlugin, VideoPlugin]
+        // pluginMap keys are "AudioPlugin", "VideoPlugin"
+    }
 }
 ```
 
-**Note**: Factory interfaces are singletons by default. Each factory call creates a new instance of the target class, with DI dependencies (like @Singleton) properly shared across all created instances.
+#### 2. Explicit Multibinding (Dagger Style)
+
+You can explicitly contribute elements using `intoSet` or `intoMap` on the builder.
+**Note:** If you register explicit contributions for a type, **implicit scanning for that collection is disabled**. Only your explicit entries will be injected.
+
+```java
+public static void buildAndInit() {
+  DimensionDI.builder()
+      .scanPackages("com.example")
+      .intoSet(Plugin.class, () -> new CustomPlugin())
+      .intoSetSingleton(Plugin.class, () -> new HeavyPlugin())
+      .intoMap(Handler.class, "login", () -> new LoginHandler())
+      .buildAndInit();
+}
+```
+
+#### 3. Named Single-Element Injection
+
+You can use `@Named` on a collection injection point to inject a collection containing **only that specific named bean**.
+
+```java
+public class Service {
+    // Injects a List containing ONLY the bean named "special"
+    @Inject
+    public Service(@Named("special") List<Plugin> specialPlugins) {
+       // size() == 1
+    }
+}
+```
+
+#### Summary and Precedence
+
+| Injection Type       | Behavior (Automatic)                  | Behavior (Explicit via Builder)                  |
+|:---------------------|:--------------------------------------|:-------------------------------------------------|
+| **`List<T>`**        | All scanned/registered instances of T | All `intoSet(T, ...)` contributions              |
+| **`Set<T>`**         | All scanned/registered instances of T | All `intoSet(T, ...)` contributions              |
+| **`Map<String, T>`** | Keys = Class Simple Name (or @Named)  | Keys = Explicit strings passed to `intoMap(...)` |
+
+In addition to injection, you can query multibindings directly via `ServiceLocator.getAll(T.class)` or `ServiceLocator.getNamedMap(T.class)`.
 
 ## How It Works
 
@@ -508,10 +526,10 @@ interface ConnectionFactory {
 - Thread-safe registry of `Key -> Supplier<?>`
 - Resolves constructor parameters on-demand (supports `@Named`)
 - **Smart fallback resolution:**
-  - Named requests fall back to unnamed bindings when named not found
-  - Unnamed requests resolve to unique named bindings when no unnamed exists
-  - Manual bindings override scanned bindings during auto-aliasing
-  - Helpful error messages show available bindings on resolution failure
+    - Named requests fall back to unnamed bindings when named not found
+    - Unnamed requests resolve to unique named bindings when no unnamed exists
+    - Manual bindings override scanned bindings during auto-aliasing
+    - Helpful error messages show available bindings on resolution failure
 - Performs members injection (fields and methods) after construction
 - Supports `@Inject` on fields and methods, including `@Named` qualifiers
 - Detects circular dependencies and throws with a helpful stack
@@ -532,15 +550,16 @@ interface ConnectionFactory {
 ## Limitations
 
 - Only Jakarta Inject annotations are supported:
-  - `@Inject` (on constructors, fields, and methods)
-  - `@Singleton`
-  - `@Named` (on constructor parameters, fields, and method parameters)
+    - `@Inject` (on constructors, fields, and methods)
+    - `@Singleton`
+    - `@Named` (on constructor parameters, fields, and method parameters)
 - Field injection works on `private`, `protected`, and `public` non-final fields, including inherited ones.
 - Named/unnamed fallback is enabled by default for convenience; disable for strict mode.
 - Manual bindings override scanned bindings when auto-aliasing is enabled.
 - **Not yet supported**:
-  - Custom qualifiers beyond `@Named`
-  - `Provider<T>`, multi-bindings (collections), scopes beyond singleton
+    - Custom qualifiers beyond `@Named`
+    - `Provider<T>` injection
+    - Scopes beyond singleton
 - Scanning uses the JDK Class-File API (Java 24+).
 
 ---
@@ -560,14 +579,19 @@ interface ConnectionFactory {
 - `.bind(interface, impl)` — Binds an interface to an implementation
 - `.bindNamed(interface, name, impl)` — Binds a named interface to an implementation
 - `.bindFactory(factoryInterface, targetClass)` — Registers an assisted injection factory
-- `.bindFactory(factoryInterface)` — Registers factory (target inferred from return type)
 - `.autoAliasUniqueNamed(boolean)` — Enable/disable auto-aliasing for unique named bindings (default: true)
+
+### Collections / Multibinding
+- `.intoSet(type, supplier)` — Contributes element to `Set<T>` / `List<T>`
+- `.intoMap(type, key, supplier)` — Contributes entry to `Map<String, T>`
+- `.intoSetSingleton(...)` / `.intoMapSingleton(...)` — Contributes cached singleton
+- `ServiceLocator.getAll(type)` — Returns `List<T>` of all bindings
+- `ServiceLocator.getNamedMap(type)` — Returns `Map<String, T>` of named bindings
 
 ### Assisted Injection
 - `ServiceLocator.create(type, assistedArgs...)` — Creates instance with runtime parameters
 - `ServiceLocator.createFactory(factoryInterface, targetClass)` — Creates a factory implementation
 - `@Assisted` — Marks constructor parameter as runtime-provided
-- `@Assisted("name")` — Named assisted parameter for disambiguation
 
 ### Utilities
 - `ServiceLocator.singleton(supplier)` — Caches an instance.
@@ -597,7 +621,7 @@ interface ConnectionFactory {
 | Assisted Injection     | ✅ `@Assisted` + Factory                | ❌ Manual                               | ✅ AssistedInject           | ✅ @AssistedInject         |
 | Field Injection        | ✅ Yes                                  | ✅ Yes                                  | ✅ Yes                      | ✅ Yes (members injection) |
 | Method Injection       | ✅ Yes                                  | ✅ Yes                                  | ✅ Yes                      | ✅ Yes (members injection) |
-| Collections/Multi-bind | ❌ No                                   | ✅ Yes                                  | ✅ Yes                      | ✅ Yes (@IntoSet/@IntoMap) |
+| Collections/Multi-bind | ✅ Yes (Implicit & Explicit)            | ✅ Yes                                  | ✅ Yes                      | ✅ Yes (@IntoSet/@IntoMap) |
 | Named/Unnamed Fallback | ✅ Automatic                            | ❌ No                                   | ❌ No                       | ❌ No                      |
 | Circular detection     | ✅ Yes, explicit                        | ✅ Yes                                  | ✅ Yes                      | ✅ Compile-time            |
 | Module/Config System   | Fluent Builder                         | `@Configuration` + XML                 | `Module` classes           | `Component` interface     |
