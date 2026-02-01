@@ -1,0 +1,134 @@
+name: Build and Release distributions
+
+on:
+  push:
+    tags:
+      - "v*" # Запускается при создании тега вида v1.0.0
+  workflow_dispatch: # Позволяет запускать вручную
+    inputs:
+      version:
+        description: 'Version to release (e.g. 26.1.10)'
+        required: true
+        type: string
+
+jobs:
+
+  release:
+    name: Релиз Dimension-DI
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: "25"
+          distribution: "liberica"
+
+      - name: Get version from tag or input
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG_NAME="v${VERSION}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Build Dimension-DI
+        run: mvn clean package -Drevision=${{ steps.version.outputs.version }}
+
+      - name: Delete existing release if present
+        run: |
+          echo "Checking for existing release: ${{ steps.version.outputs.tag_name }}"
+          if gh release view "${{ steps.version.outputs.tag_name }}" 2>/dev/null; then
+            echo "Release exists, deleting..."
+            gh release delete "${{ steps.version.outputs.tag_name }}" --yes
+            echo "Release deleted successfully"
+          else
+            echo "Release does not exist, will create new one"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check files and prepare release
+        id: check_files
+        run: |
+          echo "Available jars in target:"
+          ls -la target/
+          FILES=""
+          for file in target/*.jar; do
+            if [ -f "$file" ]; then
+              FILES="${FILES}${file}"$'\n'
+            fi
+          done
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Files to upload:"
+          echo "$FILES"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          name: Release ${{ steps.version.outputs.version }}
+          body: |
+            ## Dimension DI ${{ steps.version.outputs.version }}
+            Это библиотека, совместимая с JDK-25 и выше.
+            Compatible with JDK-25 and higher.
+            该库兼容 JDK-25 及更高版本。
+
+            ### Maven
+
+            Добавьте репозиторий JitPack в ваш `pom.xml`:
+
+            ```XML
+            <repositories>
+              <repository>
+                <id>jitpack.io</id>
+                <url>https://jitpack.io</url>
+              </repository>
+            </repositories>
+
+            <dependency>
+              <groupId>com.github.${{ github.repository_owner }}</groupId>
+              <artifactId>${{ github.event.repository.name }}</artifactId>
+              <version>${{ steps.version.outputs.tag_name }}</version>
+            </dependency>
+            ```
+
+            ### Gradle
+
+            Добавьте репозиторий JitPack в ваш `settings.gradle`:
+
+            ```Groovy
+            dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                mavenCentral()
+                maven { url 'https://jitpack.io' }
+              }
+            }
+            ```
+
+            ```Groovy
+            dependencies {
+                implementation 'com.github.${{ github.repository_owner }}:${{ github.event.repository.name }}:${{ steps.version.outputs.tag_name }}'
+            }
+            ```
+
+          files: ${{ steps.check_files.outputs.files }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
