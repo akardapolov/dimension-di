@@ -29,6 +29,12 @@
     </developer>
   </developers>
 
+  <scm>
+    <connection>scm:git:git://github.com/akardapolov/dimension-di.git</connection>
+    <developerConnection>scm:git:ssh://github.com:akardapolov/dimension-di.git</developerConnection>
+    <url>https://github.com/akardapolov/dimension-di</url>
+  </scm>
+
   <issueManagement>
     <system>GitHub</system>
     <url>https://github.com/akardapolov/dimension-di/issues</url>
@@ -49,11 +55,12 @@
 
     <maven.surefire.plugin.version>3.5.3</maven.surefire.plugin.version>
     <maven.compile.plugin.version>3.14.0</maven.compile.plugin.version>
-    <maven.release.plugin.version>3.0.0-M7</maven.release.plugin.version>
+    <maven.release.plugin.version>3.1.1</maven.release.plugin.version>
     <maven.source.plugin.version>3.3.1</maven.source.plugin.version>
     <maven.javadoc.plugin.version>3.12.0</maven.javadoc.plugin.version>
-    <maven.gpg.plugin.version>1.5</maven.gpg.plugin.version>
-    <nexus.staging.maven.plugin.version>1.6.13</nexus.staging.maven.plugin.version>
+    <maven.gpg.plugin.version>3.2.7</maven.gpg.plugin.version>
+    <central.publishing.maven.plugin.version>0.10.0</central.publishing.maven.plugin.version>
+    <flatten-maven-plugin.version>1.6.0</flatten-maven-plugin.version>
   </properties>
 
   <dependencies>
@@ -70,38 +77,8 @@
       <version>${junit.version}</version>
       <scope>test</scope>
     </dependency>
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter-api</artifactId>
-      <version>${junit.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter-engine</artifactId>
-      <version>${junit.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter-params</artifactId>
-      <version>${junit.version}</version>
-      <scope>test</scope>
-    </dependency>
 
     <!-- JUnit Platform -->
-    <dependency>
-      <groupId>org.junit.platform</groupId>
-      <artifactId>junit-platform-commons</artifactId>
-      <version>${junit.platform.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.junit.platform</groupId>
-      <artifactId>junit-platform-engine</artifactId>
-      <version>${junit.platform.version}</version>
-      <scope>test</scope>
-    </dependency>
     <dependency>
       <groupId>org.junit.platform</groupId>
       <artifactId>junit-platform-launcher</artifactId>
@@ -140,8 +117,6 @@
         <artifactId>maven-compiler-plugin</artifactId>
         <version>${maven.compile.plugin.version}</version>
         <configuration>
-          <source>25</source>
-          <target>25</target>
           <release>25</release>
         </configuration>
       </plugin>
@@ -151,13 +126,11 @@
         <artifactId>maven-release-plugin</artifactId>
         <version>${maven.release.plugin.version}</version>
         <configuration>
-          <goals>deploy nexus-staging:release</goals>
-          <releaseProfiles>ossrh,release-sign-artifacts</releaseProfiles>
+          <goals>deploy</goals>
+          <releaseProfiles>central,release-sign-artifacts</releaseProfiles>
+          <tagNameFormat>@{project.version}</tagNameFormat>
           <checkModificationExcludes>
-            <tagNameFormat>@{project.version}</tagNameFormat>
-            <autoVersionSubmodules>true</autoVersionSubmodules>
             <checkModificationExclude>pom.xml</checkModificationExclude>
-            <checkModificationExclude>**</checkModificationExclude>
           </checkModificationExcludes>
         </configuration>
       </plugin>
@@ -196,7 +169,7 @@
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>flatten-maven-plugin</artifactId>
-        <version>1.6.0</version>
+        <version>${flatten-maven-plugin.version}</version>
         <configuration>
           <updatePomFile>true</updatePomFile>
           <flattenMode>resolveCiFriendliesOnly</flattenMode>
@@ -225,7 +198,7 @@
   <profiles>
 
     <profile>
-      <id>github packages release</id>
+      <id>github-packages-release</id>
       <activation>
         <!-- Активируется автоматически когда переменная существует -->
         <property>
@@ -241,20 +214,18 @@
       </distributionManagement>
     </profile>
 
-    <!-- OSSRH (Maven Central) release profile -->
+    <!-- Maven Central release profile -->
     <profile>
-      <id>ossrh</id>
+      <id>central</id>
       <build>
         <plugins>
           <plugin>
-            <groupId>org.sonatype.plugins</groupId>
-            <artifactId>nexus-staging-maven-plugin</artifactId>
-            <version>${nexus.staging.maven.plugin.version}</version>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>${central.publishing.maven.plugin.version}</version>
             <extensions>true</extensions>
             <configuration>
-              <serverId>ossrh</serverId>
-              <nexusUrl>https://s01.oss.sonatype.org/</nexusUrl>
-              <autoReleaseAfterClose>false</autoReleaseAfterClose>
+              <publishingServerId>central</publishingServerId>
             </configuration>
           </plugin>
         </plugins>
@@ -282,32 +253,6 @@
                 <phase>verify</phase>
                 <goals>
                   <goal>sign</goal>
-                </goals>
-              </execution>
-            </executions>
-          </plugin>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-source-plugin</artifactId>
-            <version>${maven.source.plugin.version}</version>
-            <executions>
-              <execution>
-                <id>attach-sources</id>
-                <goals>
-                  <goal>jar-no-fork</goal>
-                </goals>
-              </execution>
-            </executions>
-          </plugin>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-javadoc-plugin</artifactId>
-            <version>${maven.javadoc.plugin.version}</version>
-            <executions>
-              <execution>
-                <id>attach-javadocs</id>
-                <goals>
-                  <goal>jar</goal>
                 </goals>
               </execution>
             </executions>
