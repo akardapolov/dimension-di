@@ -36,6 +36,7 @@ Tiny, fast, zero-boilerplate runtime Dependency Injection (DI) framework for Jav
 - [Documentation](#documentation)
 - [DI Containers Comparison](#di-containers-comparison)
 - [Notice](#notice)
+- [Build & Release](#build--release)
 - [Contact](#contact)
 
 This framework provides dependency injection (DI) based on JSR-330 (jakarta.inject.*) annotations. It automatically discovers and wires your application's components through constructor injection, leveraging classpath scanning near a zero-configuration setup. Designed for simplicity and fast startup, it's perfect for smaller applications, microservices, and tools that need the benefits of DI without the overhead associated with larger frameworks like Spring, Guice, and Dagger 2.
@@ -740,6 +741,52 @@ Section [DI Containers Comparison](#di-containers-comparison) was created using:
 *   **Project**: [DI Containers Comparison](https://github.com/Heapy/di-comparison)
 *   **Author**: [Ruslan Ibrahimau (Ibragimov)](https://github.com/IRus)
 *   **License**: [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
+
+## Build & Release
+
+**Prerequisites:** Java 25 (JDK Class-File API) and Maven 3.9+.
+
+### Local build & install (to local Maven repo)
+
+**Option 1 — without specifying the version**  
+If you run Maven without `-Drevision`, the default value from `pom.xml` is used (currently `${revision}` → `1.0.0-SNAPSHOT`):
+
+```bash
+mvn clean install
+```
+
+**Option 2 — with an explicit version**  
+To build the project with a specific version (override `${revision}` for this build):
+
+```bash
+mvn clean install -Drevision=26.2.3
+```
+
+### Release via Git tag
+
+Use this workflow if publishing/deployment is handled by a CI pipeline on tag push.
+
+**Linux / macOS (Bash)**
+```bash
+export RELEASE_VERSION=26.2.3
+git tag -a v"$RELEASE_VERSION" -m "Release $RELEASE_VERSION"
+git push origin v"$RELEASE_VERSION"
+```
+
+**Windows (CMD)**
+```cmd
+set RELEASE_VERSION=26.2.3
+git tag -a v%RELEASE_VERSION% -m "Release %RELEASE_VERSION%"
+git push origin v%RELEASE_VERSION%
+```
+
+### Manual publish (Maven Central)
+
+If you need to publish manually from your machine (requires configured `settings.xml` credentials and GPG signing):
+
+```bash
+mvn deploy -Pcentral -DperformRelease=true -Drevision=26.2.3
+```
 
 ## Contact
 Created by [@akardapolov](mailto:akardapolov@yandex.ru)

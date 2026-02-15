@@ -1,0 +1,144 @@
+name: Build and Release distributions
+
+on:
+  push:
+    tags:
+      - "v*.*.*" # Запускается при создании тега вида v1.0.0
+  workflow_dispatch: # Позволяет запускать вручную
+    inputs:
+      version:
+        description: 'Version to release (e.g. 26.1.10). Must be a valid semver.'
+        required: true
+        type: string
+
+jobs:
+
+  release:
+    name: Релиз Dimension-DI
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate version (semver)
+        if: github.event_name == 'workflow_dispatch'
+        uses: matt-usurp/validate-semver@v2
+        with:
+          version: ${{ github.event.inputs.version }}
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: "25"
+          distribution: "liberica"
+          cache: "maven"
+
+      - name: Get version from tag or input
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" == "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+            TAG_NAME="v${VERSION}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+      - name: Build Dimension-DI
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: mvn clean verify -Drevision=${VERSION}
+
+      - name: Delete existing release if present
+        env:
+          TAG: ${{ steps.version.outputs.tag_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking for existing release: $TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release exists, deleting..."
+            gh release delete "$TAG" --yes
+            echo "Release deleted successfully"
+          else
+            echo "Release does not exist, will create new one"
+          fi
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            echo "Tag exists, deleting..."
+            git push origin --delete "$TAG" || true
+            echo "Tag deleted successfully"
+          else
+            echo "Tag does not exist, will create new one"
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Release ${{ env.VERSION }}
+          body: |
+            ## Dimension DI ${{ env.TAG }}
+            Это библиотека, совместимая с JDK-25 и выше.
+            Compatible with JDK-25 and higher.
+            该库兼容 JDK-25 及更高版本。
+
+            ### Maven
+
+            Добавьте репозиторий JitPack в ваш `pom.xml`:
+
+            ```XML
+            <repositories>
+              <repository>
+                <id>jitpack.io</id>
+                <url>https://jitpack.io</url>
+              </repository>
+            </repositories>
+
+            <dependency>
+              <groupId>com.github.${{ env.REPO_OWNER }}</groupId>
+              <artifactId>${{ env.REPO_NAME }}</artifactId>
+              <version>${{ env.TAG }}</version>
+            </dependency>
+            ```
+
+            ### Gradle
+
+            Добавьте репозиторий JitPack в ваш `settings.gradle`:
+
+            ```Groovy
+            dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                mavenCentral()
+                maven { url 'https://jitpack.io' }
+              }
+            }
+            ```
+
+            ```Groovy
+            dependencies {
+                implementation 'com.github.${{ env.REPO_OWNER }}:${{ env.REPO_NAME }}:${{ env.TAG }}'
+            }
+            ```
+
+          files: |
+            target/dimension-di-${{ env.VERSION }}.jar
+            target/dimension-di-${{ env.VERSION }}-sources.jar
+            target/dimension-di-${{ env.VERSION }}-javadoc.jar
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
