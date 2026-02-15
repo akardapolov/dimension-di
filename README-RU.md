@@ -36,6 +36,7 @@
 - [Сравнительный анализ производительности DI-фреймворков](#сравнительный-анализ-производительности-di-фреймворков)
 - [Документация](#документация)
 - [Примечание](#примечание)
+- [Сборка и релиз](#сборка-и-релиз)
 - [Контакты](#контакты)
 
 Этот фреймворк обеспечивает внедрение зависимостей (DI) на основе аннотаций JSR-330 (jakarta.inject.*). Он автоматически
@@ -785,6 +786,54 @@ Java HotSpot(TM) 64-Bit Server VM (build 25.0.1+8-LTS-27, mixed mode, sharing)
 *   **Проект**: [DI Containers Comparison](https://github.com/Heapy/di-comparison)
 *   **Автор**: [Ruslan Ibrahimau (Ibragimov)](https://github.com/IRus)
 *   **Лицензия**: [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
+
+## Сборка и релиз
+
+**Требования:** Java 25 (JDK Class-File API) и Maven 3.9+.
+
+### Локальная сборка и установка в локальный репозиторий
+
+**Вариант 1 — без указания версии**
+
+Если запустить без `-Drevision`, будет использовано значение по умолчанию из `pom.xml` (сейчас это `${revision}` → `1.0.0-SNAPSHOT`):
+
+```bash
+mvn clean install
+```
+
+**Вариант 2 — с явным указанием версии**
+
+Чтобы собрать проект с конкретной версией нужно переопределить `${revision}` на время сборки):
+
+```bash
+mvn clean install -Drevision=26.2.3
+```
+
+### Релиз через Git tag
+
+Используйте этот способ, если публикация/деплой выполняется CI-пайплайном при пуше тега.
+
+**Linux / macOS (Bash)**
+```bash
+export RELEASE_VERSION=26.2.3
+git tag -a v"$RELEASE_VERSION" -m "Релиз версии $RELEASE_VERSION"
+git push origin v"$RELEASE_VERSION"
+```
+
+**Windows (CMD)**
+```cmd
+set RELEASE_VERSION=26.2.3
+git tag -a v%RELEASE_VERSION% -m "Релиз версии %RELEASE_VERSION%"
+git push origin v%RELEASE_VERSION%
+```
+
+### Ручная публикация (Maven Central)
+
+Если нужно публиковать вручную с локальной машины (требуется настроенный `settings.xml` и GPG-подпись):
+
+```bash
+mvn deploy -Pcentral -DperformRelease=true -Drevision=26.2.3
+```
 
 ## Контакты
 
