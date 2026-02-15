@@ -820,6 +820,13 @@ git tag -a v"$RELEASE_VERSION" -m "Релиз версии $RELEASE_VERSION"
 git push origin v"$RELEASE_VERSION"
 ```
 
+**Windows (PowerShell)**
+```powershell
+$env:RELEASE_VERSION="26.1.12"
+git tag -a v"$env:RELEASE_VERSION" -m "Release $env:RELEASE_VERSION"
+git push origin v"$env:RELEASE_VERSION"
+```
+
 **Windows (CMD)**
 ```cmd
 set RELEASE_VERSION=26.2.3
